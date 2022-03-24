@@ -28,6 +28,8 @@ class Steam_SI:
         self.s = s  # entropy - kJ/(kg K)
         self.name = name # a useful identifier
         self.region = None # 'superheated' or 'saturated'
+        self.RW=XSteam.specificGasConstant(self)
+        pass
 
     def calc(self):
         """
@@ -81,12 +83,10 @@ class Steam_SI:
         tscol, pscol, hfcol, hgcol, sfcol, sgcol, vfcol, vgcol = np.loadtxt('sat_water_table.txt', skiprows=1, unpack=True)
         # Read the superheated water table
         tcol, hcol, scol, pcol = np.loadtxt('superheated_water_table.txt', skiprows=1, unpack=True)
-        R=8.314 #kJ/kmol*K
-        MW=18.0 #kg/kmol
-        RW=R/MW
+
         # ideal gas law V=RT/P-> v=(R/MW)*(T+273)/(P)
         # calculate a column of specific volume for the superheated water table using ideal gas
-        vcol=[RW*(tcol[nI]+273)/pcol[nI] for nI in range(len(pcol))]
+        vcol=[self.RW*(tcol[nI]+273)/pcol[nI] for nI in range(len(pcol))]
 
         #region calculate properties based on case
         # if P given (easy to check saturated vs. superheated)
@@ -146,7 +146,7 @@ class Steam_SI:
                     self.region = "superheated"
                     self.x=1.0
                     self.T = float(griddata((hcol, pcol), tcol, (self.h, self.P), method='cubic'))
-                    self.v = float(griddata((hcol, pcol), vcol, (self.h, self.P), method='cubic'))
+                    self.v = self.igl_v()
                     self.s = float(griddata((hcol, pcol), scol, (self.h, self.P), method='cubic'))
                     return True
             if case.__contains__("s"):  # find if saturated or superheated
@@ -176,9 +176,13 @@ class Steam_SI:
                 elif self.T>tsat:  #superheated
                     self.region = "superheated"
                     self.x=1.0
-                    self.v = float(griddata((tcol, pcol), vcol, (self.T, self.P), method='cubic'))
-                    self.h = float(griddata((tcol, pcol), hcol, (self.T, self.P), method='cubic'))
-                    self.s = float(griddata((tcol, pcol), scol, (self.T, self.P), method='cubic'))
+                    pbar=self.P/100
+
+                    self.h=st.h_pt(self.P/100,self.T)
+                    self.s=st.s_pt(self.P/100, self.T)
+                    self.v = self.igl_v()
+                    #self.h = float(griddata((tcol, pcol), hcol, (self.T, self.P), method='cubic'))
+                    #self.s = float(griddata((tcol, pcol), scol, (self.T, self.P), method='cubic'))
                     return True
                 else: # sub-cooled, so estimate properties
                     self.region = "saturated"
@@ -236,7 +240,7 @@ class Steam_SI:
                     self.x=1.0
                     self.P = float(griddata((hcol, tcol), pcol, (self.h, self.T), method='cubic'))
                     self.s = float(griddata((hcol, tcol), scol, (self.h, self.T), method='cubic'))
-                    self.v = float(griddata((hcol, tcol), vcol, (self.h, self.T), method='cubic'))
+                    self.v = self.igl_v()
                     return True
             if case.__contains__("s"):  # find if saturated or superheated
                 xval = (self.s - sfval) / (sgval - sfval)
@@ -250,9 +254,10 @@ class Steam_SI:
                 else:  # superheated
                     self.region = "superheated"
                     self.x=1.0
+
                     self.P = float(griddata((scol, tcol), pcol, (self.s, self.T), method='cubic'))
                     self.h = float(griddata((scol, tcol), hcol, (self.s, self.T), method='cubic'))
-                    self.v = float(griddata((scol, tcol), vcol, (self.s, self.T), method='cubic'))
+                    self.v = self.igl_v()
                     return True
             return
         # if quality given (easy case) for saturated
@@ -386,20 +391,13 @@ class Steam_SI:
                     self.h = float(griddata((vcol, scol), hcol, (self.v, self.s), method='cubic'))
                     return True
                 return True
-        if case.__contains__("h"):
-            hcritical=float(griddata(pscol, hfcol, max(pscol), method='cubic'))
+        if case.__contains__("h"):  # this case has h & s given
+            #see Mollier diagram.
+            hV=float(griddata(sgcol, hgcol, self.s, method='cubic'))
+            tmax=max(tscol)
             twophase=False
-            if self.h<hcritical:
-                twophase=True
-            else:  #might be two-phase
-                tmax = float(griddata(hgcol, tscol, self.h, method='cubic'))  # temperature for x=1
-                sgsat= float(griddata(tscol, sgcol, tmax, method='cubic'))
-                if self.s<=sgsat:  # means two phase
-                    twophase=True
-            if twophase:
+            if self.h<=hV:
                 self.region="saturated"
-                tmax = max(tscol)
-
                 def findTSat_s(T):
                     sfsat=float(griddata(tscol, sfcol, T, method='cubic'))
                     sgsat=float(griddata(tscol, sgcol, T, method='cubic'))
@@ -420,11 +418,17 @@ class Steam_SI:
                 return True
             else:  # means superheated
                 self.region="superheated"
+                self.x=1.0
                 self.P = float(griddata((hcol, scol), pcol, (self.h, self.s), method='cubic'))
                 self.T = float(griddata((hcol, scol), tcol, (self.h, self.s), method='cubic'))
-                self.v = float(griddata((hcol, scol), vcol, (self.h, self.s), method='cubic'))
+                self.v = self.igl_v()
                 return True
         #endregion
+
+    def igl_v(self):
+        # ideal gas law V=RT/P-> v=(R/MW)*(T+273)/(P)
+        # calculate a column of specific volume for the superheated water table using ideal gas
+        return self.RW * (self.T + 273) / self.P
 
     def print(self):
         if self.name is not None:
